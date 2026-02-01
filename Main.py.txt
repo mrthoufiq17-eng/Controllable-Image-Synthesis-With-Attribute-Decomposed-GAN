@@ -1,0 +1,143 @@
+from skimage.metrics import structural_similarity as ssim
+from tkinter import *
+from tkinter import simpledialog
+import tkinter
+import matplotlib.pyplot as plt
+import numpy as np
+from tkinter import filedialog
+import os.path
+import os
+import tensorflow as tf
+import time
+from ADGANPP import ADGANPP
+import sys
+sys.path.append('./tools/')
+from utils import save_images, save_source
+from data_generator import ImageDataGenerator
+import cv2
+
+main = tkinter.Tk()
+main.title("Controllable Image Synthesis With Attribute-Decomposed GAN") #designing main screen
+main.geometry("1300x1200")
+
+global filename, adgan_model, sess
+
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+generator = ImageDataGenerator(batch_size = 32, height = 128, width = 128, z_dim = 256, scale_size=(128, 128), shuffle=False, mode='train')
+val_generator = ImageDataGenerator(batch_size = 32, height = 128, width = 128, z_dim = 256, scale_size=(128, 128), shuffle=False, mode='test')
+
+#function to calculate SSIM between original and generated image
+def getSSIM(original, generated):
+    orig = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+    generates = cv2.cvtColor(generated, cv2.COLOR_BGR2GRAY)
+    ssim_value = ssim(orig, generates, data_range = generates.max() - generates.min())
+    return ssim_value
+
+def upload():
+    text.delete('1.0', END)
+    global filename
+    global X, Y
+    filename = filedialog.askdirectory(initialdir=".")
+    text.delete('1.0', END)
+    text.insert(END,filename+" loaded\n");
+
+def ganModel():
+    text.delete('1.0', END)
+    global adgan_model, sess
+    with tf.Graph().as_default():
+        sess = tf.Session(config=config)
+        adgan_model = ADGANPP(sess=sess, lr = 0.001, keep_prob = 1., model_num = None, batch_size = 32, age_loss_weight = None, gan_loss_weight = None,
+                                  fea_loss_weight = None, tv_loss_weight = None)
+        adgan_model.imgs = tf.placeholder(tf.float32, [32, 128, 128, 3])
+        adgan_model.true_label_features_128 = tf.placeholder(tf.float32, [32, 128, 128, 5])
+        adgan_model.ge_samples = adgan_model.generate_images(adgan_model.imgs, adgan_model.true_label_features_128, stable_bn=False, mode='train')
+        adgan_model.get_vars()
+        adgan_model.saver = tf.train.Saver(adgan_model.save_g_vars)
+        # Start running operations on the Graph.
+        sess.run(tf.global_variables_initializer())
+        if adgan_model.load(adgan_model.saver, 'adgan', 399999):
+            text.insert(END,"ADGANPP model successfully loaded")
+        else:
+            text.insert(END,"Error in loading ADGANPP model")
+    
+
+def generateFace():
+    global adgan_model
+    text.delete('1.0', END)
+    filename = filedialog.askopenfilename(initialdir="testImages")
+    runADGan(filename)
+
+
+def runADGan(filename):
+    global sess, adgan_model
+    arr = ['original','Generated1', 'Generated2', 'Generated3', 'Generated4']
+    img_list = []
+    source = val_generator.load_imgs(filename, 128)
+    train_imgs = generator.load_train_imgs("CelebDataset/train", 128)
+    temp = np.reshape(source, (1, 128, 128, 3))
+    save_source(temp, [1, 1], "output/"+arr[0]+".jpg")
+    images = np.concatenate((temp, train_imgs), axis=0)
+    for j in range(1, generator.n_classes):
+        true_label_fea = generator.label_features_128[j]
+        dict = {
+            adgan_model.imgs: images,
+            adgan_model.true_label_features_128: true_label_fea,
+            }
+        samples = sess.run(adgan_model.ge_samples, feed_dict=dict)
+        image = np.reshape(samples[0, :, :, :], (1, 128, 128, 3))
+        save_images(image, [1, 1], "output/"+arr[j]+".jpg")
+    orig = cv2.imread("output/"+arr[0]+".jpg")
+    orig = cv2.resize(orig, (200, 200))
+    for i in range(1, len(arr)):
+        generated = cv2.imread("output/"+arr[i]+".jpg")
+        generated = cv2.resize(generated, (200, 200))
+        ssim_value = getSSIM(orig,generated)
+        text.insert(END,"ADGAN++SSIM value between Original Image and Generated Image "+str(i)+" = "+str(ssim_value)+"\n")
+        text.update_idletasks()
+    text.update_idletasks()
+    text.update()
+    for i in range(len(arr)):
+        img = cv2.imread("output/"+arr[i]+".jpg")
+        img = cv2.resize(img, (200,200))
+        cv2.putText(img, arr[i], (10, 25),  cv2.FONT_HERSHEY_SIMPLEX,0.7, (0, 0, 255), 2)
+        img_list.append(img)            
+    images = cv2.hconcat(img_list)
+    text.update_idletasks()
+    cv2.imshow("ADGAN Generated Images", images)
+    cv2.waitKey(0)    
+
+def close():
+    main.destroy()
+
+
+font = ('times', 16, 'bold')
+title = Label(main, text='Controllable Image Synthesis With Attribute-Decomposed GAN')
+title.config(bg='honeydew2', fg='DodgerBlue2')  
+title.config(font=font)           
+title.config(height=3, width=120)       
+title.place(x=0,y=5)
+
+font1 = ('times', 12, 'bold')
+text=Text(main,height=27,width=150)
+scroll=Scrollbar(text)
+text.configure(yscrollcommand=scroll.set)
+text.place(x=10,y=150)
+text.config(font=font1)
+
+
+font1 = ('times', 13, 'bold')
+uploadButton = Button(main, text="Upload CelebMask Faces Dataset", command=upload)
+uploadButton.place(x=10,y=100)
+uploadButton.config(font=font1)  
+
+ganButton = Button(main, text="Generate & Load AD-GAN++ Model", command=ganModel)
+ganButton.place(x=350,y=100)
+ganButton.config(font=font1) 
+
+modelButton = Button(main, text="Generate Synthesize Faces", command=generateFace)
+modelButton.place(x=730,y=100)
+modelButton.config(font=font1) 
+
+main.config(bg='LightSteelBlue3')
+main.mainloop()
